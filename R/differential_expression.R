@@ -1262,6 +1262,81 @@ LRDETest <- function(
   return(to.return)
 }
 
+# Perform differential expression testing using a logistic regression framework
+# using a transcript count matrix. For now, only considers equivalence classes
+# that are not intergenic.
+#
+# Constructs a logistic regression model predicting group membership based on a
+# given feature and compares this to a null model with a likelihood ratio test.
+#
+# @param data.use Equivalence class x cell matrix
+# @param eq.genes Sparse gene x equivalence class matrix
+# @param cells.1 Vector of cells in group 1
+# @param cells.2 Vector of cells in group 2
+# @param latent.vars Latent variables to include in model
+# @param verbose Print messages
+#
+#' @importFrom lmtest lrtest
+#' @importFrom pbapply pbsapply
+#' @importFrom stats as.formula glm
+#' @importFrom future.apply future_sapply
+#' @importFrom future nbrOfWorkers
+#
+TCCLRDETest <- function(
+  data.use,
+  eq.genes,
+  cells.1,
+  cells.2,
+  latent.vars = NULL,
+  verbose = TRUE
+) {
+  group.info <- data.frame(row.names = c(cells.1, cells.2))
+  group.info[cells.1, "group"] <- "Group1"
+  group.info[cells.2, "group"] <- "Group2"
+  group.info[, "group"] <- factor(x = group.info[, "group"])
+  data.use <- data.use[, rownames(group.info), drop = FALSE]
+  latent.vars <- latent.vars[rownames(group.info), , drop = FALSE]
+  my.sapply <- ifelse(
+    test = verbose && nbrOfWorkers() == 1,
+    yes = pbsapply,
+    no = future_sapply
+  )
+  p_val <- my.sapply(
+    X = 1:nrow(x = eq.genes),
+    FUN = function(x) {
+      # get equivalent classes for gene x
+      inds = which(eq.genes[x, ] == 1)
+      if (is.null(x = latent.vars)) {
+        model.data <- cbind(data.use[, inds], group.info)
+        colnames(model.data)[1:length(inds)] <- paste("EQ", inds, sep="")
+        fmla <- as.formula(object = paste(
+          "group ~", paste(colnames(x = model.data)[1:length(inds)], collapse="+")
+          ))
+        fmla2 <- as.formula(object = "group ~ 1")
+      } else {
+        model.data <- cbind(data.use[, inds], group.info, latent.vars)
+        colnames(model.data)[1:length(inds)] <- paste("EQ", inds, sep="")
+        fmla <- as.formula(object = paste(
+          "group ~",
+          paste(colnames(x = model.data)[1:length(inds)], collapse="+"), 
+          "+",
+          paste(colnames(x = latent.vars), collapse = "+")
+        ))
+        fmla2 <- as.formula(object = paste(
+          "group ~",
+          paste(colnames(x = latent.vars), collapse = "+")
+        ))
+      }
+      model1 <- glm(formula = fmla, data = model.data, family = "binomial")
+      model2 <- glm(formula = fmla2, data = model.data, family = "binomial")
+      lrtest <- lrtest(model1, model2)
+      return(lrtest$Pr[2])
+    }
+  )
+  to.return <- data.frame(p_val, row.names = rownames(eq.genes))
+  return(to.return)
+}
+
 # ROC-based marker discovery
 #
 # Identifies 'markers' of gene expression using ROC analysis. For each gene,
